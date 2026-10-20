@@ -1,0 +1,23 @@
+{
+  "users": {
+    "shayeez": {
+      "token": "shayeez-vault-2026",
+      "display_name": "Shayeez",
+      "max_storage_mb": 10240,
+      "created_at": "2026-10-20"
+    },
+    "shamim": {
+      "token": "shamim-vault-2026",
+      "display_name": "Shamim",
+      "max_storage_mb": 10240,
+      "created_at": "2026-10-20"
+    },
+    "shayeez_shamim": {
+      "token": "shayeez-shamim-vault-2026",
+      "display_name": "Shayeez & Shamim",
+      "max_storage_mb": 51200,
+      "created_at": "2026-10-20"
+    }
+  }
+}
+

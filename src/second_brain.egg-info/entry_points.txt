@@ -1,0 +1,3 @@
+[console_scripts]
+start-brain = second_brain.main:run_server
+start-web = second_brain.main:run_server

@@ -1,0 +1,20 @@
+[Unit]
+Description=Second Brain Sovereign Web & RAG Service
+After=network.target
+
+[Service]
+Type=simple
+User=app_test
+WorkingDirectory=/home/app_test/second-brain
+EnvironmentFile=/home/app_test/second-brain/.env
+ExecStart=/home/app_test/second-brain/.venv/bin/start-brain
+
+Restart=always
+RestartSec=5s
+
+# Security sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python virtual environment & cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Local databases and storage
+chroma_db/
+storage/
+*.log
+
+# Antigravity & IDE artifacts
+.gemini/
+.idea/
+.vscode/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
