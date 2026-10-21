@@ -1,21 +1,21 @@
 # Second Brain: Production Deployment & Operations Guide
 
-This guide provides the complete, step-by-step procedure for deploying and operating Second Brain on your Ubuntu VPS (`51.81.203.132`), under user **`app_test`** in **`/home/app_test/`**, coexisting with other web applications, using your local VPS LLM for maximum token savings, and managing isolated multi-user vaults.
+This guide provides the complete, step-by-step procedure for deploying and operating Second Brain on your Ubuntu VPS (`51.81.203.132`), under user **`app_test`** in **`/home/app_test/SecondBrain`**, coexisting with other web applications, using your local VPS LLM for maximum token savings, and managing isolated multi-user vaults.
 
 ---
 
 ## 1. Architecture Summary
 
-- **User & Path:** Runs under user `app_test` located at `/home/app_test/second-brain`.
+- **User & Path:** Runs under user `app_test` located at `/home/app_test/SecondBrain`.
 - **Frontend:** Sovereign Web & Mobile PWA (FastAPI + Vanilla JS/CSS, Zero 3rd-party dependencies).
 - **AI Engine (Hybrid Router):**
   - **Local VPS LLM (`qwen2.5:1.5b`):** Categorization, tagging, PARA classification, and text queries (100% free tokens, 1-second inference).
   - **Gemini Cloud (Flash):** Native multimodal extraction (voice memo transcription, whiteboard/image OCR, document/PDF comprehension).
   - **Fault Resilience:** Automatic, silent fallback to Gemini if local LLM is temporarily unreachable.
 - **Multi-Tenant Physical Vaults:**
-  - `/home/app_test/second-brain/storage/users/shayeez/` (10 GB quota)
-  - `/home/app_test/second-brain/storage/users/shamim/` (10 GB quota)
-  - `/home/app_test/second-brain/storage/users/shayeez_shamim/` (50 GB quota - Maximum storage)
+  - `/home/app_test/SecondBrain/storage/users/shayeez/` (10 GB quota)
+  - `/home/app_test/SecondBrain/storage/users/shamim/` (10 GB quota)
+  - `/home/app_test/SecondBrain/storage/users/shayeez_shamim/` (50 GB quota - Maximum storage)
   - ChromaDB collections: `vault_shayeez`, `vault_shamim`, `vault_shayeez_shamim`.
 
 ---
@@ -78,16 +78,16 @@ ss -tulpn | grep 11434
 # Output must show: 127.0.0.1:11434
 ```
 
-### Step 3.3: Clone Repository under `/home/app_test/`
+### Step 3.3: Clone Repository under `/home/app_test/SecondBrain`
 ```bash
 cd /home/app_test
-git clone <YOUR_GIT_REPO_URL> second-brain
-cd /home/app_test/second-brain
+git clone <YOUR_GIT_REPO_URL> SecondBrain
+cd /home/app_test/SecondBrain
 ```
 
 ### Step 3.4: Create Python Virtual Environment & Install
 ```bash
-cd /home/app_test/second-brain
+cd /home/app_test/SecondBrain
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip setuptools
@@ -95,9 +95,9 @@ pip install -e .
 ```
 
 ### Step 3.5: Configure Production `.env`
-Create `/home/app_test/second-brain/.env`:
+Create `/home/app_test/SecondBrain/.env`:
 ```bash
-nano /home/app_test/second-brain/.env
+nano /home/app_test/SecondBrain/.env
 ```
 Paste the following production configuration:
 ```ini
@@ -117,20 +117,20 @@ USE_LOCAL_LLM="true"
 WEB_HOST="127.0.0.1"
 WEB_PORT="8020"
 
-# Server File Storage Paths (under app_test home)
-STORAGE_DIR="/home/app_test/second-brain/storage/Raw_Inbox"
-CHROMA_DIR="/home/app_test/second-brain/chroma_db"
+# Server File Storage Paths (under app_test SecondBrain)
+STORAGE_DIR="/home/app_test/SecondBrain/storage/Raw_Inbox"
+CHROMA_DIR="/home/app_test/SecondBrain/chroma_db"
 ```
 Save and exit (`Ctrl + O`, `Enter`, `Ctrl + X`). Secure file permissions:
 ```bash
-chmod 600 /home/app_test/second-brain/.env
+chmod 600 /home/app_test/SecondBrain/.env
 ```
 
 ---
 
 ## 4. Multi-User Vault Configuration on VPS
 
-Your user vaults are pre-defined in `/home/app_test/second-brain/users.json`:
+Your user vaults are pre-defined in `/home/app_test/SecondBrain/users.json`:
 ```json
 {
   "users": {
@@ -161,11 +161,11 @@ Your user vaults are pre-defined in `/home/app_test/second-brain/users.json`:
 
 ## 5. Setup Systemd Service (24/7 Background Run)
 
-The service file in `deploy/second-brain.service` is pre-configured to run as user **`app_test`** in **`/home/app_test/second-brain`**.
+The service file in `deploy/second-brain.service` is pre-configured to run as user **`app_test`** in **`/home/app_test/SecondBrain`**.
 
 1. Copy the service definition to systemd (requires sudo):
    ```bash
-   sudo cp /home/app_test/second-brain/deploy/second-brain.service /etc/systemd/system/
+   sudo cp /home/app_test/SecondBrain/deploy/second-brain.service /etc/systemd/system/
    ```
 2. Enable and start:
    ```bash
@@ -180,29 +180,48 @@ The service file in `deploy/second-brain.service` is pre-configured to run as us
 
 ---
 
-## 6. Configure Nginx (Coexisting with Existing Apps)
+## 6. Configure Nginx — Subpath on 24x7care.org
 
-Since you have existing apps running on Nginx, Second Brain runs on dedicated internal port `127.0.0.1:8020`.
+Second Brain is served at **`https://24x7care.org/secondbrain`** by adding a `location` block inside your **existing** `24x7care.org` Nginx config. No new SSL certificate is needed — it inherits the existing one.
 
-1. Copy the Nginx site configuration:
+1. Find your existing 24x7care.org Nginx server config:
    ```bash
-   sudo cp /home/app_test/second-brain/deploy/nginx.conf /etc/nginx/sites-available/secondbrain
+   ls /etc/nginx/sites-available/
+   # Usually: 24x7care.org  OR  default  OR  24x7care
+   sudo nano /etc/nginx/sites-available/24x7care.org
    ```
-2. Edit `/etc/nginx/sites-available/secondbrain`:
-   ```bash
-   sudo nano /etc/nginx/sites-available/secondbrain
+2. Inside the **existing** `server { listen 443 ssl ... }` block, paste the following location blocks:
+   ```nginx
+   # --- Second Brain at /secondbrain ---
+   location /secondbrain/ {
+       proxy_pass http://127.0.0.1:8020/;   # trailing / strips /secondbrain prefix
+       proxy_http_version 1.1;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection "upgrade";
+       client_max_body_size 100M;
+       proxy_read_timeout 300s;
+       proxy_connect_timeout 75s;
+       proxy_send_timeout 300s;
+   }
+
+   # Redirect bare /secondbrain → /secondbrain/
+   location = /secondbrain {
+       return 301 $scheme://$host/secondbrain/;
+   }
    ```
-   Change `server_name brain.yourdomain.com;` to your actual subdomain or domain pointing to `51.81.203.132`.
-3. Enable the site in Nginx:
+3. Test and reload:
    ```bash
-   sudo ln -s /etc/nginx/sites-available/secondbrain /etc/nginx/sites-enabled/
    sudo nginx -t
    sudo systemctl reload nginx
    ```
-4. Obtain free SSL certificate:
-   ```bash
-   sudo certbot --nginx -d brain.yourdomain.com
-   ```
+4. Access your app at: **`https://24x7care.org/secondbrain`**
+
+> **No new SSL cert required.** The existing `24x7care.org` certificate already covers this path.
+> The `nginx.conf` file in `deploy/nginx.conf` contains the exact snippet to paste with detailed instructions.
 
 ---
 
@@ -219,12 +238,12 @@ git push origin main
 
 ### On Your VPS (as `app_test`):
 ```bash
-cd /home/app_test/second-brain
+cd /home/app_test/SecondBrain
 git pull
 sudo systemctl restart second-brain
 ```
 
 ### Why this update process is 100% safe:
-- **No Note Overwriting:** All markdown notes, media files, and ChromaDB embeddings are stored in `/home/app_test/second-brain/storage/` and `chroma_db/`, which are git-ignored.
+- **No Note Overwriting:** All markdown notes, media files, and ChromaDB embeddings are stored in `/home/app_test/SecondBrain/storage/` and `chroma_db/`, which are git-ignored.
 - **No Token Leakage:** The `.env` file is never touched or overwritten by Git.
 - **Instant Reload:** `systemctl restart second-brain` applies code changes in under 1 second.

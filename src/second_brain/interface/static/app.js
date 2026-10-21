@@ -3,6 +3,19 @@
  * Multimodal input, voice recording, RAG interaction, and PARA vault exploration.
  */
 
+// Derive the base path from the current page URL so all API calls work
+// correctly whether the app is hosted at / or at a subpath like /secondbrain.
+// e.g. if the page is served at https://24x7care.org/secondbrain/
+//      BASE_PATH will be "/secondbrain"
+const BASE_PATH = (() => {
+    const base = document.querySelector('base');
+    if (base && base.href) {
+        const url = new URL(base.href);
+        return url.pathname.replace(/\/$/, ''); // strip trailing slash
+    }
+    return '';
+})();
+
 document.addEventListener("DOMContentLoaded", () => {
     // State variables
     let currentMode = "auto";
@@ -120,6 +133,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     async function authFetch(url, options = {}) {
+        // Prefix with BASE_PATH so API calls work under any subpath deployment
+        const fullUrl = url.startsWith('http') ? url : BASE_PATH + url;
         options.headers = options.headers || {};
         const token = getAuthToken();
         if (token) {
@@ -138,7 +153,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         try {
-            const res = await fetch(url, options);
+            const res = await fetch(fullUrl, options);
             if (res.status === 401) {
                 showAuthGate(true);
                 showToast("Access token required or session expired.", "error");
@@ -317,7 +332,7 @@ document.addEventListener("DOMContentLoaded", () => {
             modalTitle.textContent = filename.replace(/\.md$/, "");
             modalGdrivePath.textContent = data.gdrive_path;
             modalBody.innerHTML = renderMarkdown(data.content);
-            modalDownloadLink.href = `/api/file/view?path=${category}/${filename}&download=true`;
+            modalDownloadLink.href = `${BASE_PATH}/api/file/view?path=${category}/${filename}&download=true`;
 
             noteModal.classList.remove("hidden");
         } catch (e) {
@@ -938,7 +953,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (btn) btn.disabled = true;
 
             try {
-                const res = await fetch("/api/auth/login", {
+                const res = await fetch(BASE_PATH + "/api/auth/login", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ token: token })
@@ -973,7 +988,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (btnLockVault) {
         btnLockVault.addEventListener("click", async () => {
             try {
-                await fetch("/api/auth/logout", { method: "POST" });
+                await fetch(BASE_PATH + "/api/auth/logout", { method: "POST" });
             } catch (e) {}
             clearAuthToken();
             if (authPassphrase) authPassphrase.value = "";

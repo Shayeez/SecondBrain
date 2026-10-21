@@ -5,9 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=app_test
-WorkingDirectory=/home/app_test/second-brain
-EnvironmentFile=/home/app_test/second-brain/.env
-ExecStart=/home/app_test/second-brain/.venv/bin/start-brain
+WorkingDirectory=/home/app_test/SecondBrain
+EnvironmentFile=-/home/app_test/SecondBrain/.env
+ExecStart=/home/app_test/SecondBrain/.venv/bin/python -m second_brain.main
 
 Restart=always
 RestartSec=5s
