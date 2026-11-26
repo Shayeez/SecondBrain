@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import uuid
 import logging
@@ -26,6 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from second_brain.config import (
+    STORAGE_BASE_DIR,
     STORAGE_DIR,
     WIKI_DIR,
     CHROMA_DIR,
@@ -34,11 +36,30 @@ from second_brain.config import (
     WEB_HOST,
     WEB_PORT,
     BRAIN_AUTH_TOKEN,
+    AUTO_LOGIN_ENABLED,
     _resolve_cross_platform_path
 )
 from second_brain.core.ai import process_thought, generate_rag_answer, slugify
-from second_brain.storage.database import save_to_brain, search_brain, vector_db, get_user_vector_db
-from second_brain.core.users import get_user_by_token, get_user_storage_metrics, check_user_quota
+from second_brain.storage.database import (
+    save_to_brain,
+    search_brain,
+    vector_db,
+    get_user_vector_db,
+    check_duplicate_note,
+    delete_note_from_brain
+)
+from second_brain.core.users import (
+    get_user_by_token,
+    get_user_storage_metrics,
+    check_user_quota,
+    get_default_auto_user,
+    load_user_registry
+)
+from second_brain.core.local_search import (
+    search_local_files,
+    inspect_and_answer_local,
+    scan_all_configured_dirs
+)
 
 logger = logging.getLogger("second_brain.web")
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -114,11 +135,18 @@ async def require_user(request: Request) -> dict:
     """
     Dependency that resolves and enforces authentication for the specific user.
     Returns the user profile dictionary with isolated storage paths.
+    Supports zero-click auto-login if AUTO_LOGIN_ENABLED is active.
     """
     token = extract_request_token(request)
     user = get_user_by_token(token)
     if user:
         return user
+
+    # Quality-of-Life: Zero-Click Auto-Login for local single-user machine
+    if AUTO_LOGIN_ENABLED:
+        auto_user = get_default_auto_user()
+        if auto_user:
+            return auto_user
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -173,14 +201,15 @@ async def api_auth_login(request: Request, response: Response):
     }
 
 @app.get("/api/auth/verify")
-async def api_auth_verify(request: Request):
+async def api_auth_verify(request: Request, response: Response):
     """Checks whether the client has valid authentication and returns active user."""
     token = extract_request_token(request)
     user = get_user_by_token(token)
     if user:
         return {
             "authenticated": True,
-            "auth_required": True,
+            "auth_required": not AUTO_LOGIN_ENABLED,
+            "auto_login": AUTO_LOGIN_ENABLED,
             "user": {
                 "username": user["username"],
                 "display_name": user["display_name"],
@@ -188,7 +217,34 @@ async def api_auth_verify(request: Request):
             }
         }
 
-    return {"authenticated": False, "auth_required": True}
+    # Zero-Click Auto-Login
+    if AUTO_LOGIN_ENABLED:
+        auto_user = get_default_auto_user()
+        if auto_user:
+            registry = load_user_registry()
+            user_token = registry.get(auto_user["username"], {}).get("token", "")
+            if user_token:
+                response.set_cookie(
+                    key="brain_session_token",
+                    value=user_token,
+                    httponly=True,
+                    samesite="lax",
+                    max_age=30 * 24 * 3600,
+                    path="/"
+                )
+            return {
+                "authenticated": True,
+                "auth_required": False,
+                "auto_login": True,
+                "token": user_token,
+                "user": {
+                    "username": auto_user["username"],
+                    "display_name": auto_user["display_name"],
+                    "max_storage_mb": auto_user["max_storage_mb"]
+                }
+            }
+
+    return {"authenticated": False, "auth_required": True, "auto_login": False}
 
 @app.post("/api/auth/logout")
 async def api_auth_logout(response: Response):
@@ -425,6 +481,29 @@ async def get_note_detail(category: str, filename: str, user: dict = Depends(req
         "content": content
     }
 
+@app.delete("/api/note/{category}/{filename}")
+@app.post("/api/note/{category}/{filename}/delete")
+async def delete_note_endpoint(
+    category: str,
+    filename: str,
+    delete_media: bool = Query(False),
+    user: dict = Depends(require_user)
+):
+    """Safely deletes a note from both physical storage and vector database."""
+    try:
+        res = delete_note_from_brain(
+            category=category,
+            filename=filename,
+            user=user,
+            delete_attached_media=delete_media
+        )
+        return res
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Note not found")
+    except Exception as e:
+        logger.error(f"Error deleting note {filename}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/file/view")
 async def view_or_download_file(
     path: str = Query(...),
@@ -484,6 +563,56 @@ async def ask_query(payload: dict, user: dict = Depends(require_user)):
         "sources": sources
     }
 
+# --- Cross-Platform Local Machine File Search Endpoints ---
+
+@app.get("/api/local/search")
+async def api_local_search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+    ext: Optional[str] = Query(None),
+    user: dict = Depends(require_user)
+):
+    """
+    Tier 1 High-Speed Local File Search:
+    Searches filenames, paths, and extensions using SQLite FTS5 with sub-millisecond BM25 ranking.
+    """
+    results = search_local_files(query=q, limit=limit, extension=ext)
+    return {
+        "query": q,
+        "total": len(results),
+        "files": results
+    }
+
+@app.post("/api/local/inspect")
+async def api_local_inspect(
+    payload: dict,
+    user: dict = Depends(require_user)
+):
+    """
+    Tier 2 On-Demand AI Inspection:
+    Takes a query and candidate local files, opens them live from disk, extracts text/tables,
+    and synthesizes an answer directly citing the local file paths.
+    """
+    query = payload.get("query", "").strip()
+    candidate_files = payload.get("files", [])
+    if not query:
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    res = inspect_and_answer_local(query=query, candidate_paths=candidate_files, max_files=3)
+    return res
+
+@app.post("/api/local/scan")
+async def api_local_scan(
+    user: dict = Depends(require_user)
+):
+    """Triggers an incremental scan of configured local directories to update SQLite FTS5 index."""
+    summary = scan_all_configured_dirs()
+    return {
+        "status": "success",
+        "message": f"Scanned {summary['scanned']} files. Indexed: {summary['inserted']} new, {summary['updated']} updated, {summary['deleted']} pruned.",
+        "summary": summary
+    }
+
 @app.post("/api/capture")
 async def capture_input(
     text: Optional[str] = Form(""),
@@ -524,21 +653,71 @@ async def capture_input(
         # Re-check quota with actual file size on disk
         check_user_quota(user, incoming_bytes=temp_media_path.stat().st_size)
 
-    # Command shortcuts handling (e.g., if user typed "/ask ..." or "/get ...")
+    # Command shortcuts handling (e.g., if user typed "/ask ...", "/get ...", "/find ...")
     if user_text.startswith("/ask"):
         mode = "ask"
         user_text = user_text[4:].strip()
     elif user_text.startswith("/get") or user_text.startswith("/fetch"):
         mode = "get"
         user_text = user_text.split(" ", 1)[1].strip() if " " in user_text else ""
+    elif user_text.startswith("/find") or user_text.startswith("/locate"):
+        mode = "find"
+        user_text = user_text.split(" ", 1)[1].strip() if " " in user_text else ""
+    elif mode == "auto" and not temp_media_path:
+        # Automatic natural question detection (seamless Q&A without needing /ask)
+        stripped_lower = user_text.strip().lower()
+        question_words = ("what", "how", "why", "when", "where", "who", "which", "is there", "do i have", "can you", "tell me", "explain")
+        if stripped_lower.endswith("?") or any(stripped_lower.startswith(q + " ") or stripped_lower == q for q in question_words):
+            mode = "ask"
 
     if not user_text and not temp_media_path:
         raise HTTPException(status_code=400, detail="Please provide text or attach a file/audio.")
 
     try:
+        # MODE 0: Local Machine File Search & Inspection (/find or /locate)
+        if mode == "find":
+            matched_files = search_local_files(user_text, limit=10)
+            if not matched_files:
+                return {
+                    "type": "find",
+                    "query": user_text,
+                    "answer": f"No local machine files found matching: '{user_text}'.\n\n💡 Tip: Run 'brain-scan' in your terminal to index your local directories.",
+                    "files": []
+                }
+
+            question_words = [
+                "what", "how", "why", "when", "where", "who", "which", "total",
+                "amount", "summary", "explain", "does", "do", "did", "contain",
+                "contains", "has", "have", "can", "is", "are", "tell", "show", "?"
+            ]
+            lower_text = user_text.lower()
+            tokens_set = set(re.findall(r'\b\w+\b', lower_text))
+            is_question = bool(tokens_set.intersection(question_words)) or lower_text.strip().endswith("?")
+
+            if is_question:
+                inspect_res = inspect_and_answer_local(user_text, candidate_paths=[f["filepath"] for f in matched_files[:3]])
+                return {
+                    "type": "find",
+                    "query": user_text,
+                    "answer": inspect_res["answer"],
+                    "sources": inspect_res.get("sources", []),
+                    "files": matched_files
+                }
+            else:
+                formatted_list = "\n".join(
+                    f"- 📄 **{f['filename']}** ({f['size_human']} • modified {f['modified_at']})\n  `{f['filepath']}`"
+                    for f in matched_files
+                )
+                return {
+                    "type": "find",
+                    "query": user_text,
+                    "answer": f"🔍 Found **{len(matched_files)}** file(s) on your local machine matching '{user_text}':\n\n{formatted_list}",
+                    "files": matched_files
+                }
+
         # MODE 1: Direct Ask / RAG
         if mode == "ask":
-            docs = search_brain(user_text, k=4, user=user)
+            docs = search_brain(user_text, k=5, user=user)
             if not docs:
                 return {
                     "type": "query",
@@ -609,6 +788,22 @@ async def capture_input(
             }
 
         # MODE 3 & 4: Auto (AI-routed) or Forced Note Save
+        # Check for duplicate content in user's vault before invoking LLM (prevents duplicate clutter and saves tokens)
+        dup = check_duplicate_note(content=user_text, user=user, media_path=temp_media_path)
+        if dup:
+            logger.info(f"Duplicate content detected for user '{user.get('username')}': {dup['summary']}")
+            f_p = dup.get("file_path", "")
+            return {
+                "type": "duplicate",
+                "status": "duplicate",
+                "summary": dup.get("summary", "Duplicate Note"),
+                "category": dup.get("category", "Resources"),
+                "message": "Duplicate Note: Identical content already exists in your vault.",
+                "note_gdrive": format_gdrive_path(f_p, user=user) if f_p else None,
+                "note_url": f"/api/file/view?path={f_p}" if f_p else None,
+                "note_download": f"/api/file/view?path={f_p}&download=true" if f_p else None
+            }
+
         ai_result = process_thought(text=user_text, media_path=str(temp_media_path) if temp_media_path else None)
 
         if mode == "auto" and ai_result.get("intent") == "QUERY":
@@ -678,6 +873,9 @@ async def capture_input(
             saved_media_path = dest_path
             temp_media_path = None  # Prevent deletion in finally
 
+        # Compute hash of raw user input to ensure future duplicates match this exact hash
+        user_content_hash = compute_content_hash(content=user_text, media_path=saved_media_path)
+
         # Save note to Processed_Wiki under the user's PARA folder
         note_filepath = save_to_brain(
             content=final_content,
@@ -687,7 +885,8 @@ async def capture_input(
             slug=slug,
             media_path=saved_media_path,
             media_type=media_type,
-            user=user
+            user=user,
+            content_hash=user_content_hash
         )
 
         return {
@@ -703,7 +902,8 @@ async def capture_input(
             "note_download": f"/api/file/view?path={note_filepath}&download=true",
             "media_url": f"/api/file/view?path={saved_media_path}" if saved_media_path else None,
             "media_download": f"/api/file/view?path={saved_media_path}&download=true" if saved_media_path else None,
-            "media_type": media_type
+            "media_type": media_type,
+            "model_used": ai_result.get("model_used", "Local VPS Qwen (qwen2.5:1.5b)")
         }
 
     finally:
@@ -714,10 +914,13 @@ async def capture_input(
             except Exception as e:
                 logger.error(f"Failed to delete temp media {temp_media_path}: {e}")
 
-# Mount static folder
+# Mount static folder (supports both direct localhost and /secondbrain reverse proxy)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/secondbrain/static", StaticFiles(directory=str(STATIC_DIR)), name="secondbrain_static")
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/secondbrain", response_class=HTMLResponse)
+@app.get("/secondbrain/", response_class=HTMLResponse)
 async def serve_index():
     """Serves the main application page."""
     index_file = STATIC_DIR / "index.html"
@@ -728,7 +931,7 @@ async def serve_index():
 def start_web_server(host: str = WEB_HOST, port: int = WEB_PORT):
     """Entry point to launch the web interface."""
     logger.info(f"Starting Second Brain Web Server on http://{host}:{port} ...")
-    uvicorn.run("second_brain.interface.web_server:app", host=host, port=port, reload=False)
+    uvicorn.run("second_brain.interface.web_server:app", host=host, port=port, reload=True)
 
 if __name__ == "__main__":
     start_web_server()

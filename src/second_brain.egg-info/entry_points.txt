@@ -1,3 +1,6 @@
 [console_scripts]
+brain-find = second_brain.cli.file_search:run_find_cli
+brain-import = second_brain.cli.batch_import:main
+brain-scan = second_brain.cli.file_search:run_scan_cli
 start-brain = second_brain.main:run_server
 start-web = second_brain.main:run_server

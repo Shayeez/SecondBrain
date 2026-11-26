@@ -320,12 +320,15 @@ document.addEventListener("DOMContentLoaded", () => {
         thoughtInput.focus();
     };
 
+    let currentModalNote = null;
+
     // Global helper for opening note modal
     window.openNoteModal = async function(category, filename) {
         try {
             const res = await authFetch(`/api/note/${category}/${filename}`);
             if (!res.ok) throw new Error("Could not load note");
             const data = await res.json();
+            currentModalNote = { category, filename };
 
             modalCategoryBadge.textContent = category;
             modalCategoryBadge.className = `badge badge-${category.toLowerCase()}`;
@@ -342,7 +345,44 @@ document.addEventListener("DOMContentLoaded", () => {
 
     window.closeNoteModal = function() {
         noteModal.classList.add("hidden");
+        currentModalNote = null;
     };
+
+    const btnDeleteNote = document.getElementById("btnDeleteNote");
+    if (btnDeleteNote) {
+        btnDeleteNote.addEventListener("click", async () => {
+            if (!currentModalNote) return;
+            const noteName = currentModalNote.filename.replace(/\.md$/, "");
+            if (!confirm(`Are you sure you want to permanently delete "${noteName}" and purge its vector embeddings from Second Brain?`)) {
+                return;
+            }
+            try {
+                btnDeleteNote.disabled = true;
+                const encodedCat = encodeURIComponent(currentModalNote.category);
+                const encodedFile = encodeURIComponent(currentModalNote.filename);
+                let res = await authFetch(`/api/note/${encodedCat}/${encodedFile}`, {
+                    method: "DELETE"
+                });
+                if (res.status === 405) {
+                    res = await authFetch(`/api/note/${encodedCat}/${encodedFile}/delete`, {
+                        method: "POST"
+                    });
+                }
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Failed to delete note");
+                }
+                showToast("Note and vector embeddings permanently deleted.", "success");
+                closeNoteModal();
+                loadStats();
+                renderNotesList();
+            } catch (err) {
+                showToast("Delete failed: " + err.message, "error");
+            } finally {
+                btnDeleteNote.disabled = false;
+            }
+        });
+    }
 
     if (btnCloseModal) {
         btnCloseModal.addEventListener("click", closeNoteModal);
@@ -369,6 +409,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     break;
                 case "get":
                     thoughtInput.placeholder = "Enter document/file name or topic to retrieve and download...";
+                    break;
+                case "find":
+                    thoughtInput.placeholder = "Search local machine & GDrive files (e.g. invoice, .pdf, python)...";
                     break;
                 default:
                     thoughtInput.placeholder = "Capture a thought, note, paste screenshot (Ctrl+V), or ask anything...";
@@ -653,10 +696,15 @@ document.addEventListener("DOMContentLoaded", () => {
             if (data.type === "saved") {
                 renderSavedCard(data);
                 showToast(`Saved to PARA: ${data.category}`, "success");
+            } else if (data.type === "duplicate") {
+                renderDuplicateCard(data);
+                showToast("Duplicate Note: Identical content already exists in vault.", "info");
             } else if (data.type === "query") {
                 renderRagQueryCard(data);
             } else if (data.type === "retrieval") {
                 renderRetrievalCard(data);
+            } else if (data.type === "find") {
+                renderFindCard(data);
             }
 
             // Refresh system stats and notes list
@@ -805,6 +853,59 @@ document.addEventListener("DOMContentLoaded", () => {
         card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
+    function renderDuplicateCard(data) {
+        const card = document.createElement("div");
+        card.className = "feed-item";
+        card.style.borderLeft = "3px solid #f59e0b";
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const catLower = (data.category || "resources").toLowerCase();
+
+        card.innerHTML = `
+            <div class="feed-item-header">
+                <span class="badge" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;">⚡ Duplicate Suppressed</span>
+                <span class="badge badge-${catLower}">${escapeHtml(data.category)}</span>
+                <span class="feed-timestamp">${timeStr}</span>
+            </div>
+            <div class="saved-note-title" style="color: #fcd34d;">⚠️ Note Already Exists in Vault</div>
+            <p style="color: var(--text-secondary); font-size: 0.9rem; margin: 8px 0 12px 0;">
+                ${escapeHtml(data.message || "Identical note content detected. Suppressed duplicate to keep your vault clean and save AI tokens.")}
+            </p>
+            <div class="saved-note-paths" style="margin-bottom: 12px;">
+                <div class="path-row">
+                    <span>📝 Existing Note:</span>
+                    <span class="path-code">${escapeHtml(data.summary)}</span>
+                </div>
+                ${data.note_gdrive ? `
+                <div class="path-row">
+                    <span>📄 Location:</span>
+                    <span class="path-code">${escapeHtml(data.note_gdrive)}</span>
+                </div>` : ''}
+            </div>
+            ${data.note_download ? `
+            <div class="saved-note-actions">
+                <a href="${data.note_download}" class="btn btn-secondary btn-sm" download>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download Existing Markdown
+                </a>
+                ${data.note_url ? `
+                <a href="${data.note_url}" class="btn btn-secondary btn-sm" target="_blank">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    View File
+                </a>` : ''}
+            </div>` : ''}
+        `;
+
+        interactionFeed.appendChild(card);
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
     function renderRagQueryCard(data) {
         const card = document.createElement("div");
         card.className = "feed-item";
@@ -926,6 +1027,83 @@ document.addEventListener("DOMContentLoaded", () => {
         card.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
 
+    function renderFindCard(data) {
+        const card = document.createElement("div");
+        card.className = "feed-item";
+        card.style.borderLeft = "3px solid #38bdf8";
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        const files = data.files || [];
+        let filesHtml = "";
+
+        if (files.length === 0) {
+            filesHtml = `
+                <div style="color: var(--text-secondary); font-size: 0.9rem; margin: 10px 0;">
+                    ${renderMarkdown(data.answer || "No local machine files found matching your query.")}
+                </div>
+            `;
+        } else {
+            const fileItems = files.map(f => {
+                const ext = (f.extension || "").toLowerCase();
+                let icon = "📄";
+                if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) icon = "🖼️";
+                else if ([".mp3", ".wav", ".m4a", ".ogg"].includes(ext)) icon = "🎙️";
+                else if (ext === ".pdf") icon = "📕";
+                else if ([".py", ".js", ".html", ".css", ".json", ".sh", ".toml"].includes(ext)) icon = "💻";
+                else if ([".zip", ".tar", ".gz", ".7z"].includes(ext)) icon = "📦";
+
+                return `
+                    <div class="source-item" style="margin-bottom: 8px;">
+                        <div class="source-title-row" style="display: flex; justify-content: space-between; align-items: center;">
+                            <span class="source-title" style="font-weight: 600;">${icon} ${escapeHtml(f.filename)}</span>
+                            <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 0.75rem;">${escapeHtml(f.size_human || '')}</span>
+                        </div>
+                        <div class="source-links" style="margin-top: 4px;">
+                            <span style="font-size: 0.78rem; color: var(--text-muted); font-family: var(--font-mono); word-break: break-all;">
+                                📁 ${escapeHtml(f.filepath)}
+                            </span>
+                        </div>
+                        <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 2px;">
+                            Modified: ${escapeHtml(f.modified_at || '')}
+                        </div>
+                    </div>
+                `;
+            }).join("");
+
+            filesHtml = `
+                ${data.answer ? `
+                <div class="rag-answer-box" style="background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+                    <div style="font-weight: 600; color: #38bdf8; font-size: 0.85rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                        <span>🤖</span> AI File Inspection Answer
+                    </div>
+                    <div class="rag-answer-body">${renderMarkdown(data.answer)}</div>
+                </div>` : ''}
+                <div class="sources-accordion" style="margin-top: 8px;">
+                    <div class="sources-header" style="color: #38bdf8;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <span>Matching Files (${files.length})</span>
+                    </div>
+                    ${fileItems}
+                </div>
+            `;
+        }
+
+        card.innerHTML = `
+            <div class="feed-item-header">
+                <span class="badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🔍 Local File Search</span>
+                <span class="badge" style="background: rgba(255, 255, 255, 0.06); color: var(--text-secondary);">${escapeHtml(data.query || '')}</span>
+                <span class="feed-timestamp">${timeStr}</span>
+            </div>
+            ${filesHtml}
+        `;
+
+        interactionFeed.appendChild(card);
+        card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
     function renderErrorCard(message) {
         const card = document.createElement("div");
         card.className = "feed-item";
@@ -994,6 +1172,27 @@ document.addEventListener("DOMContentLoaded", () => {
             if (authPassphrase) authPassphrase.value = "";
             showAuthGate(true);
             showToast("Vault Locked", "info");
+        });
+    }
+
+    const btnScanFiles = document.getElementById("btnScanFiles");
+    if (btnScanFiles) {
+        btnScanFiles.addEventListener("click", async () => {
+            btnScanFiles.disabled = true;
+            showToast("Scanning configured directories into search index...", "info");
+            try {
+                const res = await authFetch("/api/local/scan", { method: "POST" });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.message || "File index updated successfully!", "success");
+                } else {
+                    throw new Error(data.detail || "Scan failed");
+                }
+            } catch (e) {
+                showToast("Scan error: " + e.message, "error");
+            } finally {
+                btnScanFiles.disabled = false;
+            }
         });
     }
 

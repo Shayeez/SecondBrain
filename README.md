@@ -54,27 +54,124 @@ graph TD
 
 ---
 
-## Quick Start (Local Development)
+## Batch Document & Media Ingestion CLI (`brain-import`)
+
+Ingest entire folders of documents, PDFs, audio recordings, images, or Markdown notes in one command.
+
+```bash
+brain-import /path/to/my/folder [options]
+```
+
+### Storage Strategies (`--mode`):
+1. **`copy` (Default):** Safely copies files into `Raw_Inbox/`, creates `.md` notes in `Processed_Wiki/`, and indexes vectors into ChromaDB. Protects against missing files if the original folder is moved or deleted.
+2. **`move`:** Moves (cuts) files into `Raw_Inbox/`. Leaves **no duplicate files** on your computer.
+3. **`reference`:** Leaves files in their original location on disk and records the path in Markdown frontmatter and ChromaDB metadata. Consumes **0 extra disk bytes**.
+
+### Common CLI Examples:
+```bash
+# 1. Safe Dry-Run preview (checks files without modifying disk or spending tokens)
+brain-import ~/Documents/Notes --dry-run
+
+# 2. Ingest folder for user 'shayeez' with safe copy
+brain-import ~/Documents/Projects --user shayeez --mode copy
+
+# 3. Ingest and move PDFs/Audio without duplicates
+brain-import ~/Downloads/Invoices --mode move --extensions .pdf,.png
+
+# 4. In-place indexing of large media library without duplicating disk space
+brain-import /Volumes/Archive/Media --mode reference
+```
+
+---
+
+## Single-User & Zero-Click Auto-Login
+
+For private local machines (e.g. your personal Mac or laptop), you can bypass the passphrase gate for instant zero-click access:
+
+1. In `.env`, set:
+   ```ini
+   AUTO_LOGIN_ENABLED="true"
+   AUTO_LOGIN_USER="shayeez" # (Optional: defaults to primary user in users.json)
+   ```
+2. Open `http://localhost:8020` in Safari or Chrome. The vault opens immediately without prompting for a token or password.
+3. To re-enable strict security (e.g. when deploying to a public VPS), keep `AUTO_LOGIN_ENABLED="false"`.
+
+---
+
+## Local Machine File Search & On-Demand AI Inspection
+
+Search, locate, and interrogate files across your local computer (Windows, macOS, and Linux) with a cross-platform two-tier engine:
+
+* **Tier 1 (Instant Metadata Index):** Uses SQLite FTS5 for sub-millisecond search across filenames, paths, sizes, and modification dates.
+* **Tier 2 (On-Demand AI Inspection):** Opens matching candidate files live from disk, extracts text/tables, and synthesizes answers directly citing your local file paths.
+
+### 1. In the Web / Mobile Deck:
+* **Locate files:** Type `/find Acme invoice` $\rightarrow$ returns matching files on your machine with clickable paths and sizes.
+* **Ask questions about local files:** Type `/find Acme invoice what was the total amount?` $\rightarrow$ the AI dynamically reads the candidate files and gives you the exact answer.
+
+### 2. In Terminal via CLI:
+```bash
+# Index configured directories (~/Documents, ~/Downloads, ~/Desktop) into SQLite FTS5:
+brain-scan
+
+# Index specific folders:
+brain-scan ~/Documents ~/Projects
+
+# Search files instantly:
+brain-find "quarterly budget" --ext .pdf
+
+# On-demand AI inspection to answer questions about local files:
+brain-find "what is the marketing budget in Acme report?" --inspect
+```
+
+---
+
+## Quick Start (WSL / Linux Development)
 
 ### 1. Setup Environment
+In your WSL terminal (`Ubuntu`):
 ```bash
+cd /home/shayeez/projects/project-secondbrain
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 cp .env.example .env
 ```
 
-### 2. Run Verification Tests
+### 2. Connect VPS Local LLM (SSH Tunnel)
+To route text extraction to your free VPS Ollama (`qwen2.5:1.5b`) prior to launching the app:
 ```bash
-python test_multiuser.py
-python test_auth.py
+# Manage tunnel using helper script:
+./tunnel_vps.sh start     # Starts background tunnel
+./tunnel_vps.sh status    # Confirms connection & lists models
+# Or manual command:
+# ssh -N -L 11434:127.0.0.1:11434 app_test@51.81.203.132
 ```
 
-### 3. Launch Local Server
+### 3. Launch Second Brain
 ```bash
-./run.sh
+./run_wsl.sh
+# Or: start-brain
 ```
-Open [http://localhost:8020](http://localhost:8020) and authenticate using your vault key.
+Open **[http://localhost:8020](http://localhost:8020)** directly in your Windows browser (Chrome, Edge, Brave).
+
+### 4. Run Automated Test Suites
+```bash
+python run_all_tests.py
+```
+👉 Automated Test Plan: **[TEST_PLAN.md](file:///home/shayeez/projects/project-secondbrain/TEST_PLAN.md)**  
+👉 Interactive Step-by-Step Testing Guide: **[MANUAL_TESTING_GUIDE.md](file:///home/shayeez/projects/project-secondbrain/MANUAL_TESTING_GUIDE.md)**
+
+---
+
+## Local macOS Setup (Apple Silicon & Intel)
+
+For a one-click local macOS installation with Apple Silicon Metal acceleration and Launchd daemon:
+```bash
+./setup_mac.sh
+./run_mac.sh
+```
+👉 **[MAC_SETUP_GUIDE.md](file:///home/shayeez/projects/project-secondbrain/MAC_SETUP_GUIDE.md)**
 
 ---
 

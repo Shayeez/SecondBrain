@@ -94,6 +94,7 @@ pip install -U pip setuptools
 pip install -e .
 ```
 
+
 ### Step 3.5: Configure Production `.env`
 Create `/home/app_test/SecondBrain/.env`:
 ```bash
@@ -247,3 +248,22 @@ sudo systemctl restart second-brain
 - **No Note Overwriting:** All markdown notes, media files, and ChromaDB embeddings are stored in `/home/app_test/SecondBrain/storage/` and `chroma_db/`, which are git-ignored.
 - **No Token Leakage:** The `.env` file is never touched or overwritten by Git.
 - **Instant Reload:** `systemctl restart second-brain` applies code changes in under 1 second.
+
+---
+
+## 8. Batch Document Ingestion via CLI (`brain-import`)
+
+To import entire folders of past documents, PDFs, or audio memos into a user's vault on the VPS:
+
+```bash
+# Ingest folder with safe copy:
+./.venv/bin/brain-import /path/to/documents --user shayeez --mode copy
+
+# Ingest without duplicating disk space:
+./.venv/bin/brain-import /path/to/large_folder --user shayeez --mode move
+
+# In-place indexing:
+./.venv/bin/brain-import /path/to/archive --user shayeez --mode reference
+```
+
+*(Note: On production multi-user VPS servers, keep `AUTO_LOGIN_ENABLED="false"` in `.env` to enforce token access for all users).*

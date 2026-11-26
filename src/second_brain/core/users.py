@@ -5,7 +5,14 @@ from pathlib import Path
 from typing import Optional
 from fastapi import HTTPException, status
 
-from second_brain.config import USERS_DATA_FILE, USERS_STORAGE_DIR, BRAIN_AUTH_TOKEN, PARA_CATEGORIES, MEDIA_CATEGORIES
+from second_brain.config import (
+    USERS_DATA_FILE,
+    USERS_STORAGE_DIR,
+    BRAIN_AUTH_TOKEN,
+    PARA_CATEGORIES,
+    MEDIA_CATEGORIES,
+    AUTO_LOGIN_USER
+)
 
 logger = logging.getLogger("second_brain.users")
 
@@ -107,6 +114,18 @@ def get_user_by_token(provided_token: Optional[str]) -> Optional[dict]:
     # Ensure isolated physical directories exist for this user
     ensure_user_storage(user_obj)
     return user_obj
+
+def get_default_auto_user() -> Optional[dict]:
+    """Returns the primary user profile for auto-login / single-user mode."""
+    registry = load_user_registry()
+    if not registry:
+        return None
+    target_username = AUTO_LOGIN_USER
+    if not target_username or target_username not in registry:
+        target_username = next(iter(registry.keys()))
+    user_data = registry[target_username]
+    user_token = user_data.get("token", "")
+    return get_user_by_token(user_token)
 
 def ensure_user_storage(user: dict):
     """Creates the user's isolated directory tree and PARA folders."""

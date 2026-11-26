@@ -24,3 +24,6 @@ dependencies = [
 # Start the Second Brain Web Interface
 start-brain = "second_brain.main:run_server"
 start-web = "second_brain.main:run_server"
+brain-import = "second_brain.cli.batch_import:main"
+brain-scan = "second_brain.cli.file_search:run_scan_cli"
+brain-find = "second_brain.cli.file_search:run_find_cli"

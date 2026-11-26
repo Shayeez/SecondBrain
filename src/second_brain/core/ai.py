@@ -94,8 +94,10 @@ def process_thought(text: str = "", media_path: str = None):
     """
     
     raw_content = ""
+    model_used = f"Local VPS Qwen ({LOCAL_LLM_MODEL})"
     # Route 1: Multimodal media attached -> Send to Gemini
     if media_path:
+        model_used = "Gemini Cloud (Multimodal)"
         uploaded_file = None
         try:
             uploaded_file = client.files.upload(file=media_path)
@@ -117,20 +119,28 @@ def process_thought(text: str = "", media_path: str = None):
                 full_prompt = f"{instructions}\n\nUser's text:\n{text}"
                 raw_content = query_local_llm(full_prompt, system_prompt="You are an automated note structuring assistant.")
                 logger.info(f"Successfully processed thought via Local LLM ({LOCAL_LLM_MODEL})")
+                model_used = f"Local VPS Qwen ({LOCAL_LLM_MODEL})"
             except Exception as e:
                 logger.warning(f"Local LLM processing failed ({e}). Falling back to Gemini.")
                 raw_content = ""
 
         # Fallback to Gemini if local LLM is disabled or encountered an error
         if not raw_content:
-            prompt_parts = [instructions]
-            if text:
-                prompt_parts.append(f"User's caption/text: {text}")
-            response = client.models.generate_content(
-                model='gemini-3.5-flash-lite',
-                contents=prompt_parts
-            )
-            raw_content = response.text
+            try:
+                model_used = "Gemini Cloud (Fallback)"
+                prompt_parts = [instructions]
+                if text:
+                    prompt_parts.append(f"User's caption/text: {text}")
+                response = client.models.generate_content(
+                    model='gemini-3.5-flash-lite',
+                    contents=prompt_parts
+                )
+                raw_content = response.text
+            except Exception as e:
+                logger.error(f"Cloud Gemini processing failed ({e}). Using offline heuristic fallback.")
+                model_used = "Offline Heuristic Fallback"
+                clean_preview = (text or "").strip().split("\n")[0][:40] or "Note"
+                raw_content = f"""Intent: SAVE\nCategory: Resources\nSummary: {clean_preview}\nSlug: {slugify(clean_preview)}\nTags: note, quick\nDescription: {text}"""
         
     lines = raw_content.strip().split("\n")
     
@@ -165,7 +175,7 @@ def process_thought(text: str = "", media_path: str = None):
             
     if intent == "QUERY":
         clean_query = query.strip() or text.strip()
-        return {"intent": "QUERY", "query": clean_query}
+        return {"intent": "QUERY", "query": clean_query, "model_used": model_used}
 
     else:
         tags = [t.strip() for t in tags_str.strip("[]").split(",")]
@@ -177,38 +187,39 @@ def process_thought(text: str = "", media_path: str = None):
             "summary": summary,
             "slug": slug,
             "tags": tags,
-            "content": final_content
+            "content": final_content,
+            "model_used": model_used
         }
 
 def generate_rag_answer(query: str, context_documents) -> str:
     """Generates an answer using the retrieved context, temporal awareness, and local/cloud routing."""
     
-    # Combine the content of the retrieved documents
-    context_text = "\n\n".join(
-        [f"Note Summary ({doc.metadata.get('summary', 'Unknown')}):\n{doc.page_content}" for doc in context_documents]
-    )
+    # Combine the content of the retrieved documents with clear headers
+    notes_parts = []
+    for doc in context_documents:
+        s = doc.metadata.get("summary", "Note")
+        c = doc.metadata.get("category", "General")
+        notes_parts.append(f"--- Note: {s} (Category: {c}) ---\n{doc.page_content}")
+    context_text = "\n\n".join(notes_parts)
     
     # Capture the exact current date and time
     current_date = datetime.now().strftime("%B %d, %Y")
     
-    # Update the prompt with temporal context and calculation permissions
-    prompt = f"""
-    You are a highly capable assistant accessing my personal Second Brain.
-    
-    CRITICAL CONTEXT: 
-    Today's date is {current_date}. 
-    
-    INSTRUCTIONS:
-    1. Use the following Context Notes to answer the user's question.
-    2. You are allowed to perform logical deductions, math, or date calculations (e.g., calculating age from a birthdate) using the provided context and today's date.
-    3. If the context does not contain the underlying facts needed to answer or calculate the answer, state "I don't have any notes on that yet."
-    4. Do not hallucinate personal facts outside of the provided notes.
-    
-    Context Notes:
-    {context_text}
-    
-    Question: {query}
-    """
+    # Clean, direct prompt optimized for both local LLM (Qwen) and Gemini
+    prompt = f"""You are my personal Second Brain assistant. Today's date is {current_date}.
+Use the Context Notes below to answer the user's question directly, concisely, and factually.
+
+Context Notes:
+{context_text}
+
+User Question: {query}
+
+Instructions:
+- Answer directly based on the information provided in the Context Notes.
+- Include specific deadlines, deliverables, dates, or details mentioned in the notes.
+- If none of the notes contain relevant information to answer the question, simply reply: "I couldn't find any relevant notes in your Second Brain for that question."
+
+Answer:"""
     
     raw_content = ""
     # Try Local LLM first if enabled
@@ -222,9 +233,13 @@ def generate_rag_answer(query: str, context_documents) -> str:
 
     # Fallback to Gemini if Local LLM is disabled or failed
     if not raw_content:
-        response = llm.invoke(prompt)
-        raw_content = response.content
-        if isinstance(raw_content, list):
-            raw_content = raw_content[0].get("text", "") if isinstance(raw_content[0], dict) else str(raw_content[0])
+        try:
+            response = llm.invoke(prompt)
+            raw_content = response.content
+            if isinstance(raw_content, list):
+                raw_content = raw_content[0].get("text", "") if isinstance(raw_content[0], dict) else str(raw_content[0])
+        except Exception as e:
+            logger.error(f"Cloud Gemini RAG failed ({e}). Returning retrieved notes.")
+            raw_content = f"Here is the relevant information retrieved from your Second Brain:\n\n{context_text}"
         
     return raw_content.strip()
